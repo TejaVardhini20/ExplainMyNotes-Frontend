@@ -1,0 +1,1403 @@
+import { useState } from "react";
+import "./App.css";
+
+function App() {
+  const [file, setFile] = useState(null);
+  const [analyzed, setAnalyzed] = useState(false);
+  const [extractedText, setExtractedText] = useState("");
+  const [analysisData, setAnalysisData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const [quizStarted, setQuizStarted] = useState(false);
+  const [currentQuestion, setCurrentQuestion] = useState(0);
+  const [selectedAnswer, setSelectedAnswer] = useState("");
+  const [score, setScore] = useState(0);
+  const [quizFinished, setQuizFinished] = useState(false);
+
+  const [flashcardIndex, setFlashcardIndex] = useState(0);
+  const [showAnswer, setShowAnswer] = useState(false);
+
+  const [weakTopics, setWeakTopics] = useState([]);
+
+  const handleFileChange = (event) => {
+    const selectedFile = event.target.files[0];
+
+    if (!selectedFile) {
+      return;
+    }
+
+    setFile(selectedFile);
+    setAnalyzed(false);
+    setExtractedText("");
+    setAnalysisData(null);
+    setErrorMessage("");
+
+    setQuizStarted(false);
+    setCurrentQuestion(0);
+    setSelectedAnswer("");
+    setScore(0);
+    setQuizFinished(false);
+
+    setFlashcardIndex(0);
+    setShowAnswer(false);
+    setWeakTopics([]);
+  };
+
+  const handleAnalyze = async () => {
+    if (!file) {
+      setErrorMessage("Please choose a PDF file first.");
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage("");
+    setAnalyzed(false);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const uploadResponse = await fetch("/api/files/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error(`Upload failed (${uploadResponse.status})`);
+      }
+
+      const text = await uploadResponse.text();
+
+      if (text.startsWith("Error:")) {
+        throw new Error(text);
+      }
+
+      setExtractedText(text);
+
+      const notesResponse = await fetch("/api/notes");
+
+      if (!notesResponse.ok) {
+        throw new Error("Could not fetch notes.");
+      }
+
+      const notes = await notesResponse.json();
+
+      if (!notes || notes.length === 0) {
+        throw new Error("No notes found.");
+      }
+
+      const latestNote = notes[notes.length - 1];
+
+      const analysisResponse = await fetch(
+        `/api/notes/${latestNote.id}/analyze`,
+        {
+          method: "POST",
+        }
+      );
+
+      if (!analysisResponse.ok) {
+        throw new Error("Analysis failed.");
+      }
+
+      const analysis = await analysisResponse.json();
+
+      setAnalysisData(analysis);
+      setAnalyzed(true);
+
+      setQuizStarted(false);
+      setCurrentQuestion(0);
+      setSelectedAnswer("");
+      setScore(0);
+      setQuizFinished(false);
+
+      setFlashcardIndex(0);
+      setShowAnswer(false);
+      setWeakTopics([]);
+    } catch (error) {
+      console.error(error);
+
+      setErrorMessage(
+        error.message ||
+          "Something went wrong while analyzing the file."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* =========================
+     FIXED SECTION NAVIGATION
+     ========================= */
+
+  const scrollToSection = (id) => {
+    setTimeout(() => {
+      const element = document.getElementById(id);
+
+      if (!element) {
+        console.log(`Section not found: ${id}`);
+        return;
+      }
+
+      const header = document.querySelector(".header");
+
+      const headerHeight = header
+        ? header.getBoundingClientRect().height
+        : 0;
+
+      const elementPosition =
+        element.getBoundingClientRect().top +
+        window.scrollY;
+
+      const offsetPosition =
+        elementPosition - headerHeight - 20;
+
+      window.scrollTo({
+        top: Math.max(0, offsetPosition),
+        behavior: "smooth",
+      });
+    }, 100);
+  };
+
+  /* =========================
+     QUIZ
+     ========================= */
+
+  const startQuiz = () => {
+    setQuizStarted(true);
+    setCurrentQuestion(0);
+    setSelectedAnswer("");
+    setScore(0);
+    setQuizFinished(false);
+    setWeakTopics([]);
+
+    setTimeout(() => {
+      const quizSection = document.getElementById("quiz");
+
+      if (quizSection) {
+        quizSection.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }
+    }, 100);
+  };
+
+  const handleAnswerSelect = (answer) => {
+    if (quizFinished) {
+      return;
+    }
+
+    setSelectedAnswer(answer);
+  };
+
+  const submitAnswer = () => {
+    if (!selectedAnswer || !analysisData?.quiz) {
+      return;
+    }
+
+    const questions = analysisData.quiz;
+    const question = questions[currentQuestion];
+
+    if (!question) {
+      return;
+    }
+
+    const isCorrect =
+      selectedAnswer.trim().toLowerCase() ===
+      String(question.answer || "")
+        .trim()
+        .toLowerCase();
+
+    const newScore = isCorrect ? score + 1 : score;
+
+    if (currentQuestion < questions.length - 1) {
+      if (isCorrect) {
+        setScore((previousScore) => previousScore + 1);
+      }
+
+      setCurrentQuestion(
+        (previousQuestion) => previousQuestion + 1
+      );
+
+      setSelectedAnswer("");
+    } else {
+      setScore(newScore);
+      setQuizFinished(true);
+      setQuizStarted(false);
+
+      generateWeakTopics(newScore, questions);
+
+      setTimeout(() => {
+        const revisionSection =
+          document.getElementById("revision");
+
+        if (revisionSection) {
+          revisionSection.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
+        }
+      }, 300);
+    }
+  };
+
+  const generateWeakTopics = (finalScore, questions) => {
+    if (!questions || questions.length === 0) {
+      setWeakTopics([]);
+      return;
+    }
+
+    const totalQuestions = questions.length;
+    const percentage =
+      (finalScore / totalQuestions) * 100;
+
+    if (percentage >= 80) {
+      setWeakTopics([]);
+      return;
+    }
+
+    const weak = [];
+
+    if (percentage < 50) {
+      weak.push(
+        "Review the complete set of uploaded notes."
+      );
+
+      weak.push(
+        "Revise the key points before attempting the quiz again."
+      );
+    } else {
+      weak.push(
+        "Revise the concepts covered by the missed questions."
+      );
+    }
+
+    weak.push(
+      "Use the flashcards to strengthen concept recall."
+    );
+
+    setWeakTopics(weak);
+  };
+
+  const restartQuiz = () => {
+    setQuizStarted(true);
+    setCurrentQuestion(0);
+    setSelectedAnswer("");
+    setScore(0);
+    setQuizFinished(false);
+    setWeakTopics([]);
+
+    setTimeout(() => {
+      scrollToSection("quiz");
+    }, 100);
+  };
+
+  /* =========================
+     FLASHCARDS
+     ========================= */
+
+  const nextFlashcard = () => {
+    if (!analysisData?.flashcards) {
+      return;
+    }
+
+    if (
+      flashcardIndex <
+      analysisData.flashcards.length - 1
+    ) {
+      setFlashcardIndex(
+        (previousIndex) => previousIndex + 1
+      );
+
+      setShowAnswer(false);
+    }
+  };
+
+  const previousFlashcard = () => {
+    if (flashcardIndex > 0) {
+      setFlashcardIndex(
+        (previousIndex) => previousIndex - 1
+      );
+
+      setShowAnswer(false);
+    }
+  };
+
+  /* =========================
+     SCORE MESSAGE
+     ========================= */
+
+  const getScoreMessage = () => {
+    if (!analysisData?.quiz) {
+      return "";
+    }
+
+    const total = analysisData.quiz.length;
+
+    if (score === total) {
+      return "Excellent! You have mastered these concepts.";
+    }
+
+    if (score >= Math.ceil(total * 0.8)) {
+      return "Great job! You have a strong understanding.";
+    }
+
+    if (score >= Math.ceil(total * 0.5)) {
+      return "Good attempt! A little more revision will help.";
+    }
+
+    return "Keep practicing. Review the notes and flashcards again.";
+  };
+
+  /* =========================
+     SAFE DATA
+     ========================= */
+
+  const keyPoints = Array.isArray(
+    analysisData?.keyPoints
+  )
+    ? analysisData.keyPoints
+    : [];
+
+  const flashcards = Array.isArray(
+    analysisData?.flashcards
+  )
+    ? analysisData.flashcards
+    : [];
+
+  const quiz = Array.isArray(
+    analysisData?.quiz
+  )
+    ? analysisData.quiz
+    : [];
+
+  const currentFlashcard =
+    flashcards[flashcardIndex];
+
+  const currentQuizQuestion =
+    quiz[currentQuestion];
+
+  return (
+    <div className="app">
+
+      {/* =========================
+          HEADER
+          ========================= */}
+
+      <header className="header">
+
+        <div className="header-container">
+
+          <div className="logo">
+            ExplainMyNotes 📚
+          </div>
+
+          <nav className="nav">
+
+            <button
+              type="button"
+              onClick={() =>
+                scrollToSection("home")
+              }
+            >
+              Home
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                scrollToSection("features")
+              }
+            >
+              Features
+            </button>
+
+            {analyzed && (
+              <button
+                type="button"
+                onClick={() =>
+                  scrollToSection("results")
+                }
+              >
+                Results
+              </button>
+            )}
+
+          </nav>
+
+        </div>
+
+      </header>
+
+      {/* =========================
+          HERO
+          ========================= */}
+
+      <section
+        className="hero"
+        id="home"
+      >
+
+        <div className="hero-content">
+
+          <div className="badge">
+            AI-Powered Study Assistant
+          </div>
+
+          <h1>
+            Turn Your Notes Into
+            <span>
+              {" "}
+              Smart Study Material
+            </span>
+          </h1>
+
+          <p>
+            Upload your study notes and let
+            ExplainMyNotes transform them into
+            simple explanations, key points,
+            flashcards, quizzes and revision material.
+          </p>
+
+          {/* UPLOAD */}
+
+          <div className="upload-card">
+
+            <div className="upload-icon">
+              📄
+            </div>
+
+            <h2>
+              Upload Your Notes
+            </h2>
+
+            <p>
+              Choose a PDF file to analyze your
+              study material.
+            </p>
+
+            <label className="file-input-label">
+
+              Choose PDF
+
+              <input
+                type="file"
+                accept=".pdf"
+                onChange={handleFileChange}
+              />
+
+            </label>
+
+            {file && (
+              <p className="selected-file">
+                Selected:{" "}
+                <strong>
+                  {file.name}
+                </strong>
+              </p>
+            )}
+
+            <button
+              type="button"
+              className="analyze-button"
+              onClick={handleAnalyze}
+              disabled={loading || !file}
+            >
+              {loading
+                ? "Analyzing..."
+                : "Analyze Notes"}
+            </button>
+
+            {errorMessage && (
+              <div className="error-message">
+                {errorMessage}
+              </div>
+            )}
+
+          </div>
+
+        </div>
+
+      </section>
+
+      {/* =========================
+          FEATURES
+          ========================= */}
+
+      <section
+        className="features"
+        id="features"
+      >
+
+        <div className="section-heading">
+
+          <div className="badge">
+            What You Get
+          </div>
+
+          <h2>
+            Everything You Need To Study Smarter
+          </h2>
+
+          <p>
+            ExplainMyNotes converts lengthy notes
+            into easy-to-understand study resources.
+          </p>
+
+        </div>
+
+        <div className="feature-grid">
+
+          <div className="feature-card">
+
+            <div className="feature-icon">
+              💡
+            </div>
+
+            <h3>
+              Simple Explanation
+            </h3>
+
+            <p>
+              Understand difficult concepts
+              in simple language.
+            </p>
+
+          </div>
+
+          <div className="feature-card">
+
+            <div className="feature-icon">
+              📝
+            </div>
+
+            <h3>
+              Key Points
+            </h3>
+
+            <p>
+              Quickly identify the most
+              important concepts.
+            </p>
+
+          </div>
+
+          <div className="feature-card">
+
+            <div className="feature-icon">
+              🧠
+            </div>
+
+            <h3>
+              Flashcards
+            </h3>
+
+            <p>
+              Practice important concepts
+              through active recall.
+            </p>
+
+          </div>
+
+          <div className="feature-card">
+
+            <div className="feature-icon">
+              🎯
+            </div>
+
+            <h3>
+              Quiz
+            </h3>
+
+            <p>
+              Test your understanding with
+              AI-generated questions.
+            </p>
+
+          </div>
+
+          <div className="feature-card">
+
+            <div className="feature-icon">
+              🔄
+            </div>
+
+            <h3>
+              Revision
+            </h3>
+
+            <p>
+              Identify areas that need
+              more revision.
+            </p>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      {/* =========================
+          RESULTS
+          ========================= */}
+
+      {analyzed && analysisData && (
+
+        <section
+          className="results"
+          id="results"
+        >
+
+          <div className="results-header">
+
+            <div className="badge">
+              Analysis Complete
+            </div>
+
+            <h2>
+              Your Study Material
+            </h2>
+
+            <p>
+              Your notes have been converted
+              into personalized study resources.
+            </p>
+
+          </div>
+
+          {/* RESULT CARDS */}
+
+          <div className="result-grid">
+
+            <div className="result-card">
+
+              <h3>
+                💡 Simple Explanation
+              </h3>
+
+              <p>
+                Understand your notes
+                in easy language.
+              </p>
+
+              <button
+                type="button"
+                onClick={() =>
+                  scrollToSection("explanation")
+                }
+              >
+                View Explanation
+              </button>
+
+            </div>
+
+            <div className="result-card">
+
+              <h3>
+                📝 Key Points
+              </h3>
+
+              <p>
+                Important concepts extracted
+                from your notes.
+              </p>
+
+              <button
+                type="button"
+                onClick={() =>
+                  scrollToSection("key-points")
+                }
+              >
+                View Key Points
+              </button>
+
+            </div>
+
+            <div className="result-card">
+
+              <h3>
+                🧠 Flashcards
+              </h3>
+
+              <p>
+                Practice and remember
+                important concepts.
+              </p>
+
+              <button
+                type="button"
+                onClick={() =>
+                  scrollToSection("flashcards")
+                }
+              >
+                Start Flashcards
+              </button>
+
+            </div>
+
+            <div className="result-card">
+
+              <h3>
+                🎯 Quiz
+              </h3>
+
+              <p>
+                Test your understanding
+                of the notes.
+              </p>
+
+              <button
+                type="button"
+                onClick={() =>
+                  scrollToSection("quiz")
+                }
+              >
+                Take Quiz
+              </button>
+
+            </div>
+
+            <div className="result-card">
+
+              <h3>
+                🔄 Revision
+              </h3>
+
+              <p>
+                Get a revision recommendation
+                based on your performance.
+              </p>
+
+              <button
+                type="button"
+                onClick={() =>
+                  scrollToSection("revision")
+                }
+              >
+                View Revision
+              </button>
+
+            </div>
+
+            <div className="result-card">
+
+              <h3>
+                📄 Extracted Notes
+              </h3>
+
+              <p>
+                View the text extracted
+                from your PDF.
+              </p>
+
+              <button
+                type="button"
+                onClick={() =>
+                  scrollToSection("extracted-notes")
+                }
+              >
+                View Notes
+              </button>
+
+            </div>
+
+          </div>
+
+          {/* =========================
+              SIMPLE EXPLANATION
+              ========================= */}
+
+          <div
+            className="content-section"
+            id="explanation"
+          >
+
+            <div className="section-heading">
+
+              <div className="badge">
+                Understand
+              </div>
+
+              <h2>
+                Simple Explanation
+              </h2>
+
+            </div>
+
+            <div className="result-content-card">
+
+              <p>
+                {analysisData.simpleExplanation ||
+                  "No explanation was generated."}
+              </p>
+
+            </div>
+
+            <div className="result-content-card">
+
+              <h3>
+                Summary
+              </h3>
+
+              <p>
+                {analysisData.summary ||
+                  "No summary was generated."}
+              </p>
+
+            </div>
+
+          </div>
+
+          {/* =========================
+              KEY POINTS
+              ========================= */}
+
+          <div
+            className="content-section"
+            id="key-points"
+          >
+
+            <div className="section-heading">
+
+              <div className="badge">
+                Important
+              </div>
+
+              <h2>
+                Key Points
+              </h2>
+
+            </div>
+
+            <div className="key-points-list">
+
+              {keyPoints.length > 0 ? (
+
+                keyPoints.map(
+                  (point, index) => (
+
+                    <div
+                      className="key-point-item"
+                      key={index}
+                    >
+
+                      <span>
+                        {index + 1}
+                      </span>
+
+                      <p>
+                        {point}
+                      </p>
+
+                    </div>
+
+                  )
+                )
+
+              ) : (
+
+                <p>
+                  No key points were generated.
+                </p>
+
+              )}
+
+            </div>
+
+          </div>
+
+          {/* =========================
+              FLASHCARDS
+              ========================= */}
+
+          <div
+            className="content-section"
+            id="flashcards"
+          >
+
+            <div className="section-heading">
+
+              <div className="badge">
+                Active Recall
+              </div>
+
+              <h2>
+                Flashcards
+              </h2>
+
+              <p>
+                Test yourself before revealing
+                the answer.
+              </p>
+
+            </div>
+
+            {currentFlashcard ? (
+
+              <div className="flashcard-area">
+
+                <div
+                  className="flashcard"
+                  onClick={() =>
+                    setShowAnswer(!showAnswer)
+                  }
+                >
+
+                  <div className="flashcard-number">
+                    Card {flashcardIndex + 1} of{" "}
+                    {flashcards.length}
+                  </div>
+
+                  {!showAnswer ? (
+
+                    <>
+
+                      <h3>
+                        Question
+                      </h3>
+
+                      <p>
+                        {currentFlashcard.question}
+                      </p>
+
+                      <span>
+                        Click to reveal answer
+                      </span>
+
+                    </>
+
+                  ) : (
+
+                    <>
+
+                      <h3>
+                        Answer
+                      </h3>
+
+                      <p>
+                        {currentFlashcard.answer}
+                      </p>
+
+                      <span>
+                        Click to hide answer
+                      </span>
+
+                    </>
+
+                  )}
+
+                </div>
+
+                <div className="flashcard-controls">
+
+                  <button
+                    type="button"
+                    onClick={previousFlashcard}
+                    disabled={
+                      flashcardIndex === 0
+                    }
+                  >
+                    ← Previous
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setShowAnswer(!showAnswer)
+                    }
+                  >
+                    {showAnswer
+                      ? "Hide Answer"
+                      : "Reveal Answer"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={nextFlashcard}
+                    disabled={
+                      flashcardIndex ===
+                      flashcards.length - 1
+                    }
+                  >
+                    Next →
+                  </button>
+
+                </div>
+
+              </div>
+
+            ) : (
+
+              <div className="result-content-card">
+
+                <p>
+                  No flashcards were generated.
+                </p>
+
+              </div>
+
+            )}
+
+          </div>
+
+          {/* =========================
+              QUIZ
+              ========================= */}
+
+          <div
+            className="content-section"
+            id="quiz"
+          >
+
+            <div className="section-heading">
+
+              <div className="badge">
+                Test Yourself
+              </div>
+
+              <h2>
+                Quiz
+              </h2>
+
+              <p>
+                Check how well you understand
+                your notes.
+              </p>
+
+            </div>
+
+            {!quizStarted &&
+              !quizFinished && (
+
+                <div className="result-content-card quiz-start-card">
+
+                  <h3>
+                    Ready to test yourself?
+                  </h3>
+
+                  <p>
+                    This quiz contains{" "}
+                    {quiz.length} questions
+                    based on your uploaded notes.
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={startQuiz}
+                  >
+                    Start Quiz
+                  </button>
+
+                </div>
+
+              )}
+
+            {quizStarted &&
+              !quizFinished &&
+              currentQuizQuestion && (
+
+                <div className="quiz-card">
+
+                  <div className="quiz-progress">
+                    Question{" "}
+                    {currentQuestion + 1} of{" "}
+                    {quiz.length}
+                  </div>
+
+                  <h3>
+                    {currentQuizQuestion.question}
+                  </h3>
+
+                  <div className="quiz-options">
+
+                    {Array.isArray(
+                      currentQuizQuestion.options
+                    ) &&
+                      currentQuizQuestion.options.map(
+                        (option, index) => (
+
+                          <button
+                            type="button"
+                            key={index}
+                            className={`quiz-option ${
+                              selectedAnswer === option
+                                ? "selected"
+                                : ""
+                            }`}
+                            onClick={() =>
+                              handleAnswerSelect(option)
+                            }
+                          >
+                            {option}
+                          </button>
+
+                        )
+                      )}
+
+                  </div>
+
+                  <button
+                    type="button"
+                    className="quiz-submit"
+                    onClick={submitAnswer}
+                    disabled={!selectedAnswer}
+                  >
+                    {currentQuestion ===
+                    quiz.length - 1
+                      ? "Finish Quiz"
+                      : "Next Question"}
+                  </button>
+
+                </div>
+
+              )}
+
+            {quizFinished && (
+
+              <div className="quiz-result">
+
+                <div className="score-circle">
+                  {score}/{quiz.length}
+                </div>
+
+                <h3>
+                  Quiz Complete!
+                </h3>
+
+                <p>
+                  {getScoreMessage()}
+                </p>
+
+                <p>
+                  You scored{" "}
+                  <strong>
+                    {Math.round(
+                      (score / quiz.length) * 100
+                    )}
+                    %
+                  </strong>
+                </p>
+
+                <button
+                  type="button"
+                  onClick={restartQuiz}
+                >
+                  Try Again
+                </button>
+
+              </div>
+
+            )}
+
+          </div>
+
+          {/* =========================
+              REVISION
+              ========================= */}
+
+          <div
+            className="content-section"
+            id="revision"
+          >
+
+            <div className="section-heading">
+
+              <div className="badge">
+                Smart Revision
+              </div>
+
+              <h2>
+                Revision
+              </h2>
+
+              <p>
+                Use your quiz performance
+                to guide your revision.
+              </p>
+
+            </div>
+
+            <div className="revision-card">
+
+              {!quizFinished ? (
+
+                <>
+
+                  <h3>
+                    🎯 Take the quiz first
+                  </h3>
+
+                  <p>
+                    Complete the quiz to get
+                    a personalized revision
+                    recommendation based on
+                    your score.
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      scrollToSection("quiz")
+                    }
+                  >
+                    Go To Quiz
+                  </button>
+
+                </>
+
+              ) : weakTopics.length === 0 ? (
+
+                <>
+
+                  <h3>
+                    🎉 Excellent Performance!
+                  </h3>
+
+                  <p>
+                    You performed very well
+                    on the quiz.
+                  </p>
+
+                  <p>
+                    Your current understanding
+                    looks strong.
+                  </p>
+
+                  <p>
+                    Continue reviewing the
+                    flashcards to maintain
+                    your knowledge.
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      scrollToSection("flashcards")
+                    }
+                  >
+                    Review Flashcards
+                  </button>
+
+                </>
+
+              ) : (
+
+                <>
+
+                  <h3>
+                    📚 Topics To Revise
+                  </h3>
+
+                  <p>
+                    Your quiz performance suggests
+                    that you should spend some more
+                    time revising:
+                  </p>
+
+                  <div className="revision-list">
+
+                    {weakTopics.map(
+                      (topic, index) => (
+
+                        <div
+                          className="key-point-item"
+                          key={index}
+                        >
+
+                          <span>
+                            {index + 1}
+                          </span>
+
+                          <p>
+                            {topic}
+                          </p>
+
+                        </div>
+
+                      )
+                    )}
+
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      scrollToSection("flashcards")
+                    }
+                  >
+                    Start Revision
+                  </button>
+
+                </>
+
+              )}
+
+            </div>
+
+          </div>
+
+          {/* =========================
+              EXTRACTED NOTES
+              ========================= */}
+
+          <div
+            className="extracted-notes"
+            id="extracted-notes"
+          >
+
+            <div className="section-heading">
+
+              <div className="badge">
+                Original Content
+              </div>
+
+              <h2>
+                Extracted Notes
+              </h2>
+
+            </div>
+
+            <div className="notes-content">
+
+              {extractedText ||
+                "No extracted text available."}
+
+            </div>
+
+          </div>
+
+        </section>
+
+      )}
+
+      {/* =========================
+          FOOTER
+          ========================= */}
+
+      <footer className="footer">
+
+        <div className="footer-content">
+
+          <h3>
+            ExplainMyNotes 📚
+          </h3>
+
+          <p>
+            Learn smarter. Understand better.
+            Revise faster.
+          </p>
+
+          <p>
+            © 2026 ExplainMyNotes
+          </p>
+
+        </div>
+
+      </footer>
+
+    </div>
+  );
+}
+
+export default App;
