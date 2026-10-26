@@ -67,12 +67,11 @@ function App() {
       formData.append("file", file);
 
 <<<<<<< HEAD
-            const API_URL = "https://explainmynotes-api.onrender.com";
-
-      const uploadResponse = await fetch(`${API_URL}/files/upload`, {
+                 const uploadResponse = await fetch(`${API_URL}/files/upload`, {
         method: "POST",
         body: formData,
       });
+        
 >>>>>>> 8e4cda0 (Fix backend upload API URL)
 
       if (!uploadResponse.ok) {
