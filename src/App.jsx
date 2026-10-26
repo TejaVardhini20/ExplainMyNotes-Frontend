@@ -58,10 +58,12 @@ function App() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const uploadResponse = await fetch("/api/files/upload", {
-        method: "POST",
-        body: formData,
-      });
+      const API_URL = "https://explainmynotes-api.onrender.com";
+
+const uploadResponse = await fetch(`${API_URL}/files/upload`, {
+  method: "POST",
+  body: formData,
+});
 
       if (!uploadResponse.ok) {
         throw new Error(`Upload failed (${uploadResponse.status})`);
